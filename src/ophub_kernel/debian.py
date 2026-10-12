@@ -1,9 +1,11 @@
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from datetime import datetime
 
 from .model import ValidatedKernel
 
@@ -74,6 +76,12 @@ def build_packages(kernel: ValidatedKernel, revision: int, output: Path, provena
             elif name == image_name:
                 control += "Recommends: u-boot-menu\n"
             _write(stage / "DEBIAN/control", control)
-            subprocess.run(["dpkg-deb", "--root-owner-group", "-Zxz", "--build", str(stage), str(target)],
-                           check=True, stdout=subprocess.PIPE)
+            updated_at = provenance.get("asset", {}).get("updated_at")
+            epoch = int(datetime.fromisoformat(updated_at.replace("Z", "+00:00")).timestamp()) if updated_at else 0
+            for entry in stage.rglob("*"):
+                os.utime(entry, (epoch, epoch), follow_symlinks=False)
+            os.utime(stage, (epoch, epoch))
+            environment = dict(os.environ, SOURCE_DATE_EPOCH=str(epoch))
+            subprocess.run(["dpkg-deb", "--root-owner-group", "--threads-max=1", "-Zxz", "--build", str(stage), str(target)],
+                           check=True, stdout=subprocess.PIPE, env=environment)
     return targets

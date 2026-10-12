@@ -56,6 +56,9 @@ class FlatRepoTests(unittest.TestCase):
         self.assertIn("Valid-Until:", (www / "Release").read_text())
         self.assertNotIn("private", " ".join(path.name for path in www.iterdir()))
         self.assertEqual(json.loads((www / "build-manifest.json").read_text())["fixture"], True)
+        import hashlib
+        self.assertIn(hashlib.sha256((www / "build-manifest.json").read_bytes()).hexdigest(),
+                      (www / "Release").read_text())
         apt = self.root / "apt"
         for directory in ("state/lists/partial", "cache/archives/partial", "etc"):
             (apt / directory).mkdir(parents=True, exist_ok=True)

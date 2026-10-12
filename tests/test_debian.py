@@ -61,6 +61,12 @@ class DebianTests(unittest.TestCase):
             self.p.build_packages(self.kernel, 1, self.root / "out", {})
         self.assertEqual(files[0].read_bytes(), original)
 
+    def test_identical_payload_reproducible_across_extraction_mtimes(self):
+        first = self.p.build_packages(self.kernel, 1, self.root / "first", {})
+        os.utime(self.kernel.modules_dir / "module.ko", (100, 100))
+        second = self.p.build_packages(self.kernel, 1, self.root / "second", {})
+        self.assertEqual([path.read_bytes() for path in first], [path.read_bytes() for path in second])
+
     def test_postinst_propagates_hook_failure(self):
         files = self.p.build_packages(self.kernel, 1, self.root / "out", {})
         image = next(path for path in files if path.name.startswith("linux-image-6.12."))

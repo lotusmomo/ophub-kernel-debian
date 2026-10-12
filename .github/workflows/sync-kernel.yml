@@ -1,0 +1,40 @@
+name: Sync ophub stable 6.12 kernel
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apt-6.12-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg kmod
+      - run: PYTHONPATH=src python3 -m unittest discover -s tests -v
+      - name: Import signing key and synchronize
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          M13_APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          M13_APT_FINGERPRINT: ${{ secrets.APT_SIGNING_FINGERPRINT }}
+          M13_GPG_HOME: ${{ runner.temp }}/m13-apt-signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$M13_APT_SIGNING_KEY"
+          test -n "$M13_APT_FINGERPRINT"
+          install -d -m 0700 "$M13_GPG_HOME"
+          printf '%s' "$M13_APT_SIGNING_KEY" | gpg --homedir "$M13_GPG_HOME" --batch --import
+          unset M13_APT_SIGNING_KEY
+          PYTHONPATH=src python3 -m ophub_kernel.cli sync \
+            --repo "$GITHUB_REPOSITORY" --revision "$GITHUB_RUN_NUMBER" \
+            --signing-home "$M13_GPG_HOME" --fingerprint "$M13_APT_FINGERPRINT"

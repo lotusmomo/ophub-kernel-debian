@@ -49,11 +49,20 @@ def build_repository(packages: list[Path], output: Path, signing_home: Path,
     (output / "Packages.gz").write_bytes(gzip.compress(scanned.encode(), mtime=0))
     (output / "Packages.xz").write_bytes(lzma.compress(scanned.encode()))
     now = datetime.now(timezone.utc)
+    records = []
+    for package in sorted(output.glob("*.deb")):
+        control = subprocess.check_output(["dpkg-deb", "--field", str(package)], text=True)
+        fields = dict(line.split(": ", 1) for line in control.splitlines() if ": " in line)
+        records.append({"filename": package.name, "sha256": sha256_file(package), "size": package.stat().st_size,
+                        "package": fields["Package"], "version": fields["Version"], "architecture": fields["Architecture"]})
+    published = dict(manifest, packages=records, signing_fingerprint=fingerprint,
+                     metadata_generated_at=now.isoformat(), origin="M13-ophub-6.12")
+    (output / "build-manifest.json").write_text(json.dumps(published, indent=2) + "\n")
     release = ("Origin: M13-ophub-6.12\nLabel: M13 ophub stable 6.12\nSuite: apt-6.12\n"
                "Codename: apt-6.12\nArchitectures: arm64 all\n"
                f"Date: {format_datetime(now, usegmt=True)}\n"
                f"Valid-Until: {format_datetime(now + timedelta(days=7), usegmt=True)}\nSHA256:\n")
-    for name in ("Packages", "Packages.gz", "Packages.xz"):
+    for name in ("Packages", "Packages.gz", "Packages.xz", "build-manifest.json"):
         path = output / name
         release += f" {sha256_file(path)} {path.stat().st_size:16d} {name}\n"
     (output / "Release").write_text(release)
@@ -66,15 +75,6 @@ def build_repository(packages: list[Path], output: Path, signing_home: Path,
     if not public:
         raise ValueError("public key export empty")
     (output / "archive-keyring.gpg").write_bytes(public)
-    records = []
-    for package in sorted(output.glob("*.deb")):
-        control = subprocess.check_output(["dpkg-deb", "--field", str(package)], text=True)
-        fields = dict(line.split(": ", 1) for line in control.splitlines() if ": " in line)
-        records.append({"filename": package.name, "sha256": sha256_file(package), "size": package.stat().st_size,
-                        "package": fields["Package"], "version": fields["Version"], "architecture": fields["Architecture"]})
-    published = dict(manifest, packages=records, signing_fingerprint=fingerprint,
-                     metadata_generated_at=now.isoformat(), origin="M13-ophub-6.12")
-    (output / "build-manifest.json").write_text(json.dumps(published, indent=2) + "\n")
     (output / "ophub-kernel.sources").write_text(render_sources(
         "file:/mnt/ophub-kernel/", "/etc/apt/keyrings/ophub-kernel.gpg"))
     (output / "index.html").write_text("<!doctype html><meta charset=utf-8><title>M13 kernel artifacts</title>\n" +
