@@ -59,6 +59,14 @@ class FlatRepoTests(unittest.TestCase):
         import hashlib
         self.assertIn(hashlib.sha256((www / "build-manifest.json").read_bytes()).hexdigest(),
                       (www / "Release").read_text())
+        from ophub_kernel import deployment
+        self.assertTrue(hasattr(deployment, "verified_manifest"), "authenticated deployment manifest missing")
+        self.assertTrue(deployment.verified_manifest(www, www / "archive-keyring.gpg", fingerprint)["fixture"])
+        manifest_text = (www / "build-manifest.json").read_text()
+        (www / "build-manifest.json").write_text(manifest_text.replace('"fixture": true', '"fixture": false'))
+        with self.assertRaises(ValueError):
+            deployment.verified_manifest(www, www / "archive-keyring.gpg", fingerprint)
+        (www / "build-manifest.json").write_text(manifest_text)
         apt = self.root / "apt"
         for directory in ("state/lists/partial", "cache/archives/partial", "etc"):
             (apt / directory).mkdir(parents=True, exist_ok=True)

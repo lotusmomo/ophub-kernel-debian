@@ -22,6 +22,17 @@ def recipe_commit():
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
 
+def check_cached_inputs(output: Path, manifest: dict, asset, recipe: str, dtb: str):
+    if needs_rebuild(asset, manifest, recipe, dtb):
+        raise ValueError("cached build inputs changed; use a new revision")
+    hashes = manifest.get("package_hashes", {})
+    if not hashes:
+        raise ValueError("cached build lacks package hashes; use a new revision")
+    for name, digest in hashes.items():
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+\-]*\.deb", name) or sha256_file(output / name) != digest:
+            raise ValueError("cached package integrity failure")
+
+
 def prepare_packages(cache: Path, output: Path, revision: int):
     asset = select_asset(fetch_release())
     bundle = download_asset(asset, cache)
@@ -34,6 +45,7 @@ def prepare_packages(cache: Path, output: Path, revision: int):
                 "source_reference": "https://github.com/ophub/kernel#kernel-source-code",
                 "source_repository": "https://github.com/unifreq/linux-6.12.y"}
     packages = build_packages(kernel, revision, output, manifest)
+    manifest["package_hashes"] = {p.name: sha256_file(p) for p in packages}
     (output / "build-input.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return packages, manifest
 
@@ -84,6 +96,8 @@ def main():
     build.add_argument("--cache", type=Path, default=ROOT / ".cache")
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--revision", type=int, required=True)
+    cache_check = sub.add_parser("check-build")
+    cache_check.add_argument("--packages", type=Path, required=True)
     repository = sub.add_parser("repository")
     repository.add_argument("--packages", type=Path, required=True)
     repository.add_argument("--output", type=Path, required=True)
@@ -107,6 +121,11 @@ def main():
         elif args.command == "build":
             packages, manifest = prepare_packages(args.cache, args.output, args.revision)
             print(json.dumps({"packages": [str(p) for p in packages], "kernel_release": manifest["kernel_release"]}, indent=2))
+        elif args.command == "check-build":
+            manifest = json.loads((args.packages / "build-input.json").read_text())
+            check_cached_inputs(args.packages, manifest, select_asset(fetch_release()), recipe_commit(),
+                                sha256_file(ROOT / "assets/m13/meson-gxbb-tianmao-m13.dtb"))
+            print("Cached inputs and package hashes verified")
         elif args.command == "repository":
             manifest = json.loads((args.packages / "build-input.json").read_text())
             build_repository(sorted(args.packages.glob("*.deb")), args.output, args.signing_home,
