@@ -57,6 +57,17 @@ def read_config(path: Path) -> dict[str, str]:
                 if line.startswith("CONFIG_") and "=" in line)
 
 
+def validate_image(image: Path, release: str) -> None:
+    if not image.is_file() or image.stat().st_size < 64:
+        raise ValueError("kernel image missing")
+    data = image.read_bytes()
+    if data[56:60] != b"ARMd":
+        raise ValueError("expected uncompressed ARM64 Image for existing booti path")
+    actual = set(match.decode("ascii") for match in re.findall(rb"Linux version ([A-Za-z0-9_.+\-]+) ", data))
+    if actual != {release}:
+        raise ValueError("actual Image release differs from module release")
+
+
 def validate_bundle(bundle: Path, asset: Asset, workspace: Path, m13_dtb: Path) -> ValidatedKernel:
     if sha256_file(bundle) != asset.sha256 or bundle.stat().st_size != asset.size:
         raise ValueError("outer asset hash or size mismatch")
@@ -87,12 +98,7 @@ def validate_bundle(bundle: Path, asset: Asset, workspace: Path, m13_dtb: Path) 
         if config.get(capability) not in ("y", "m"):
             raise ValueError("required boot capability missing: " + capability)
     image = directories["boot"] / f"vmlinuz-{release}"
-    if not image.is_file() or image.stat().st_size < 64:
-        raise ValueError("kernel image missing")
-    with image.open("rb") as stream:
-        header = stream.read(64)
-    if header[56:60] != b"ARMd":
-        raise ValueError("expected uncompressed ARM64 Image for existing booti path")
+    validate_image(image, release)
     module_files = sorted(modules.rglob("*.ko*"))
     if not module_files:
         raise ValueError("module payload missing")

@@ -2,19 +2,65 @@ import gzip
 import html
 import json
 import lzma
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
 
-from .deployment import render_sources
+from .deployment import render_sources, verified_manifest
 from .upstream import sha256_file
 
 
 def build_repository(packages: list[Path], output: Path, signing_home: Path,
                      fingerprint: str, manifest: dict) -> Path:
+    home, destination = signing_home.resolve(), output.resolve()
+    if not home.is_dir() or home.stat().st_mode & 0o077:
+        raise ValueError("signing home must exist and be owner-only")
+    if home.is_relative_to(destination) or destination.is_relative_to(home) or output.is_symlink():
+        raise ValueError("unsafe exported repository/signing path")
+    if not re.fullmatch(r"[0-9A-Fa-f]{40,64}", fingerprint):
+        raise ValueError("invalid signing fingerprint")
+    public = subprocess.check_output(["gpg", "--homedir", str(home), "--batch", "--export", fingerprint])
+    if not public:
+        raise ValueError("selected signing key is unavailable")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="repository-generation-", dir=output.parent) as folder:
+        temporary = Path(folder)
+        keyring = temporary / "trusted.gpg"
+        keyring.write_bytes(public)
+        stage = temporary / "wwwroot"
+        stage.mkdir(mode=0o755)
+        if output.exists():
+            allowed = {"Packages", "Packages.gz", "Packages.xz", "Release", "Release.gpg", "InRelease",
+                       "archive-keyring.gpg", "build-manifest.json", "SHA256SUMS", "index.html", "ophub-kernel.sources"}
+            for path in output.iterdir():
+                if not path.is_file() or path.is_symlink() or (path.name not in allowed and not path.name.endswith(".deb")):
+                    raise ValueError("unexpected file in exported repository")
+            if (output / "InRelease").exists():
+                # Old metadata may have expired; authentication and immutable
+                # bytes remain mandatory when renewing its dates.
+                verified_manifest(output, keyring, fingerprint, check_dates=False)
+            elif any((output / name).exists() for name in ("Packages", "Release", "build-manifest.json")):
+                raise ValueError("incomplete prior repository cannot be silently re-signed")
+            for path in output.iterdir():
+                shutil.copyfile(path, stage / path.name)
+        _build_generation(packages, stage, home, fingerprint, manifest)
+        verified_manifest(stage, keyring, fingerprint)
+        # Keep the exported directory inode stable for existing NFS handles.
+        # Only a completely signed/verified generation reaches this point.
+        output.mkdir(parents=True, exist_ok=True)
+        output.chmod(0o755)
+        for path in sorted(stage.iterdir(), key=lambda p: (p.name == "InRelease", p.name)):
+            os.replace(path, output / path.name)
+    return output
+
+
+def _build_generation(packages: list[Path], output: Path, signing_home: Path,
+                      fingerprint: str, manifest: dict) -> Path:
     home = signing_home.resolve()
     destination = output.resolve()
     if not home.is_dir() or (home.stat().st_mode & 0o077):

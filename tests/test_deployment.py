@@ -34,3 +34,10 @@ class DeploymentTests(unittest.TestCase):
             "[Time]\nNTP=\nNTP=time.example.net\nFallbackNTP=\n")
         with self.assertRaises(ValueError):
             self.p.render_timesyncd("time.example.net\nNTP=evil")
+
+    def test_apt_new_install_architecture_is_not_an_upgrade(self):
+        self.assertTrue(hasattr(self.p, "validate_apt_simulation"))
+        self.p.validate_apt_simulation("Inst nfs-common (1:2.8.3-1 Debian:13.7/stable [arm64])\n", {"nfs-common"}, new_only=True)
+        for text in ("Inst nfs-common [old] (new Debian [arm64])", "Remv linux-image-old [1]"):
+            with self.assertRaises(ValueError):
+                self.p.validate_apt_simulation(text, {"nfs-common"}, new_only=True)

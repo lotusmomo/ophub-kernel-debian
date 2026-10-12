@@ -33,7 +33,17 @@ def render_timesyncd(server: str) -> str:
     return f"[Time]\nNTP=\nNTP={server}\nFallbackNTP=\n"
 
 
-def verified_manifest(repository: Path, keyring: Path, fingerprint: str) -> dict:
+def validate_apt_simulation(text: str, allowed: set[str], *, new_only=False) -> None:
+    for line in text.splitlines():
+        if line.startswith("Remv "):
+            raise ValueError("simulation would remove an existing package")
+        if line.startswith("Inst "):
+            fields = line.split(maxsplit=2)
+            if len(fields) != 3 or fields[1] not in allowed or (new_only and fields[2].startswith("[")):
+                raise ValueError("unexpected package installation/upgrade: " + line)
+
+
+def verified_manifest(repository: Path, keyring: Path, fingerprint: str, *, check_dates=True, check_packages=True) -> dict:
     with tempfile.TemporaryDirectory(prefix="verified-release-") as folder:
         decoded = Path(folder) / "Release"
         verification = subprocess.run(["gpgv", "--status-fd=1", "--keyring", str(keyring.resolve()),
@@ -43,19 +53,23 @@ def verified_manifest(repository: Path, keyring: Path, fingerprint: str) -> dict
         release = decoded.read_text()
         dates = dict(re.findall(r"(?m)^(Date|Valid-Until): (.+)$", release))
         now = datetime.now(timezone.utc)
-        if not parsedate_to_datetime(dates["Date"]) <= now <= parsedate_to_datetime(dates["Valid-Until"]):
+        if check_dates and not parsedate_to_datetime(dates["Date"]) <= now <= parsedate_to_datetime(dates["Valid-Until"]):
             raise ValueError("repository metadata is not currently valid")
         hashes = {name: (digest, int(size)) for digest, size, name in
                   re.findall(r"(?m)^ ([0-9a-f]{64}) +([0-9]+) (\S+)$", release)}
+        for name in ("Packages", "Packages.gz", "Packages.xz", "build-manifest.json"):
+            path = repository / name
+            if hashes.get(path.name) != (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size):
+                raise ValueError("repository file differs from signed metadata: " + name)
+        if (repository / 'Release').read_bytes() != decoded.read_bytes():
+            raise ValueError('Release differs from authenticated InRelease body')
         path = repository / "build-manifest.json"
-        if hashes.get(path.name) != (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size):
-            raise ValueError("deployment manifest differs from signed metadata")
         manifest = json.loads(path.read_text())
         for record in manifest["packages"]:
             name = record["filename"]
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+\-]*\.deb", name):
                 raise ValueError("unsafe package filename")
             package = repository / name
-            if (hashlib.sha256(package.read_bytes()).hexdigest(), package.stat().st_size) != (record["sha256"], record["size"]):
+            if check_packages and (hashlib.sha256(package.read_bytes()).hexdigest(), package.stat().st_size) != (record["sha256"], record["size"]):
                 raise ValueError("deployment package mismatch: " + name)
         return manifest

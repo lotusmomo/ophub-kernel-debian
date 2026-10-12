@@ -94,13 +94,25 @@ class DebianTests(unittest.TestCase):
         hook = hookdir / "fail"
         hook.write_text("#!/bin/sh\nexit 23\n")
         hook.chmod(0o755)
+        menu = hookdir / "zz-u-boot-menu"
+        menu.write_text('#!/bin/sh\nprintf menu > /boot/menu-promoted\n')
+        menu.chmod(0o755)
+        symlinks = sandbox / "usr/sbin/linux-update-symlinks"
+        symlinks.write_text('#!/bin/sh\nprintf promoted > /boot/symlink-promoted\n')
+        symlinks.chmod(0o755)
         subprocess.run(["dpkg-deb", "--control", str(image), str(sandbox / "control")], check=True)
         prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
         command = prefix + ["/usr/sbin/chroot", str(sandbox), "/bin/sh", "/control/postinst", "configure"]
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(old.read_text(), "preserve")
+        self.assertFalse((sandbox / "boot/menu-promoted").exists(), "menu updated after initramfs failure")
+        self.assertFalse((sandbox / "boot/symlink-promoted").exists(), "default symlink promoted too early")
+        hook.write_text('#!/bin/sh\nexit 0\n')
+        self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+        self.assertFalse((sandbox / "boot/menu-promoted").exists(), "missing initramfs was promoted")
         hook.write_text('#!/bin/sh\nprintf initramfs > "/boot/initrd.img-$1"\n')
         self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
         self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
         self.assertEqual(old.read_text(), "preserve")
+        self.assertTrue((sandbox / "boot/menu-promoted").exists())

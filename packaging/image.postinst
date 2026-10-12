@@ -6,13 +6,21 @@ case "$1" in
         depmod -a "$version"
         export INITRD=Yes
         export DEB_MAINT_PARAMS="$*"
-        if command -v linux-update-symlinks >/dev/null 2>&1; then
-            linux-update-symlinks install "$version" "/boot/vmlinuz-$version"
-        fi
-        run-parts --arg="$version" --arg="/boot/vmlinuz-$version" /etc/kernel/postinst.d
+        # run-parts normally continues after errors. Execute the native
+        # non-menu hooks in order, stopping immediately on any failure.
+        for hook in $(run-parts --test /etc/kernel/postinst.d); do
+            case "$hook" in */zz-u-boot-menu) continue ;; esac
+            "$hook" "$version" "/boot/vmlinuz-$version"
+        done
         if [ ! -s "/boot/initrd.img-$version" ]; then
             echo "Required initramfs was not generated for $version" >&2
             exit 1
+        fi
+        if command -v linux-update-symlinks >/dev/null 2>&1; then
+            linux-update-symlinks install "$version" "/boot/vmlinuz-$version"
+        fi
+        if [ -x /etc/kernel/postinst.d/zz-u-boot-menu ]; then
+            /etc/kernel/postinst.d/zz-u-boot-menu "$version" "/boot/vmlinuz-$version"
         fi
         ;;
 esac

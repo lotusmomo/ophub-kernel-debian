@@ -12,7 +12,7 @@ from pathlib import Path
 from .archive import M13_DTB_SHA256, validate_bundle
 from .debian import build_packages
 from .flatrepo import build_repository
-from .github import GitHubClient, needs_rebuild, publish_release
+from .github import GitHubClient, needs_rebuild, publish_release, recover_publication
 from .upstream import download_asset, fetch_release, select_asset, sha256_file
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,13 +55,18 @@ def restore_previous(repo: str, output: Path, home: Path, fingerprint: str):
     release = client.release("apt-6.12")
     if not release:
         return None
+    public = subprocess.check_output(["gpg", "--homedir", str(home), "--batch", "--export", fingerprint])
+    recover_publication(client, release, public, fingerprint)
     assets = client.assets(release)
+    if 'InRelease' not in assets:
+        if not any(name in assets for name in ('Packages', 'Release', 'build-manifest.json')):
+            return None
+        raise ValueError('incomplete release without an authenticated recovery journal')
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="previous-") as directory:
         temp = Path(directory)
         for name in ("InRelease", "Packages", "build-manifest.json"):
             (temp / name).write_bytes(client.download(assets[name]))
-        public = subprocess.check_output(["gpg", "--homedir", str(home), "--batch", "--export", fingerprint])
         (temp / "keyring.gpg").write_bytes(public)
         subprocess.run(["gpgv", "--keyring", str(temp / "keyring.gpg"), "--output", str(temp / "decoded"),
                         str(temp / "InRelease")], check=True, capture_output=True)

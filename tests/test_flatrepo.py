@@ -18,6 +18,47 @@ class FlatRepoTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
+    def fixture_key(self):
+        home = self.root / "signing"
+        home.mkdir(mode=0o700)
+        subprocess.run(["gpg", "--homedir", str(home), "--batch", "--pinentry-mode", "loopback",
+            "--passphrase", "", "--quick-generate-key", "Fixture <fixture@localhost>",
+            "ed25519", "sign", "1d"], check=True, capture_output=True)
+        listing = subprocess.check_output(["gpg", "--homedir", str(home), "--with-colons", "--list-keys"], text=True)
+        return home, next(line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:"))
+
+    def fixture_deb(self, name):
+        stage = self.root / (name + "-stage/DEBIAN")
+        stage.mkdir(parents=True)
+        (stage / "control").write_text(f"Package: {name}\nVersion: 1\nArchitecture: all\nMaintainer: Fixture <fixture@localhost>\nDescription: test\n")
+        output = self.root / (name + "_1_all.deb")
+        subprocess.run(["dpkg-deb", "--root-owner-group", "--build", str(stage.parent), str(output)], check=True, capture_output=True)
+        return output
+
+    def test_historical_deb_tamper_cannot_be_resigned(self):
+        home, fingerprint = self.fixture_key()
+        old = self.fixture_deb("old")
+        new = self.fixture_deb("new")
+        www = self.p.build_repository([old], self.root / "wwwroot", home, fingerprint, {})
+        original_metadata = (www / "InRelease").read_bytes()
+        control = self.root / "old-stage/DEBIAN/control"
+        control.write_text(control.read_text().replace("Description: test", "Description: changed historical package"))
+        subprocess.run(["dpkg-deb", "--root-owner-group", "--build", str(control.parent.parent), str(www / old.name)], check=True, capture_output=True)
+        with self.assertRaises(ValueError):
+            self.p.build_repository([new], www, home, fingerprint, {})
+        self.assertEqual((www / "InRelease").read_bytes(), original_metadata)
+        self.assertFalse((www / new.name).exists())
+
+    def test_signing_failure_preserves_previous_generation(self):
+        home, fingerprint = self.fixture_key()
+        old = self.fixture_deb("old")
+        new = self.fixture_deb("new")
+        www = self.p.build_repository([old], self.root / "wwwroot", home, fingerprint, {})
+        before = {p.name: p.read_bytes() for p in www.iterdir()}
+        with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+            self.p.build_repository([new], www, home, "A" * 40, {})
+        self.assertEqual(before, {p.name: p.read_bytes() for p in www.iterdir()})
+
     def test_missing_signing_home_fails_before_publishing(self):
         with self.assertRaises(ValueError):
             self.p.build_repository([], self.root / "wwwroot", self.root / "missing", "A" * 40, {})
@@ -62,6 +103,11 @@ class FlatRepoTests(unittest.TestCase):
         from ophub_kernel import deployment
         self.assertTrue(hasattr(deployment, "verified_manifest"), "authenticated deployment manifest missing")
         self.assertTrue(deployment.verified_manifest(www, www / "archive-keyring.gpg", fingerprint)["fixture"])
+        compressed = (www / 'Packages.xz').read_bytes()
+        (www / 'Packages.xz').write_bytes(b'corrupted compressed index')
+        with self.assertRaises(ValueError):
+            deployment.verified_manifest(www, www / 'archive-keyring.gpg', fingerprint, check_packages=False)
+        (www / 'Packages.xz').write_bytes(compressed)
         manifest_text = (www / "build-manifest.json").read_text()
         (www / "build-manifest.json").write_text(manifest_text.replace('"fixture": true', '"fixture": false'))
         with self.assertRaises(ValueError):

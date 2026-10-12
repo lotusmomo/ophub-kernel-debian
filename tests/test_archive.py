@@ -42,6 +42,15 @@ class ArchiveTests(unittest.TestCase):
         self.unpack([("release/a", "file", b"abc")])
         self.assertEqual((self.root / "out/release/a").read_bytes(), b"abc")
 
+    def test_image_banner_binds_actual_release_to_modules(self):
+        self.assertTrue(hasattr(self.p, "validate_image"), "actual Image release check missing")
+        image = self.root / "Image"
+        header = bytes(56) + b"ARMd" + bytes(4)
+        image.write_bytes(header + b"Linux version 6.12.112-ophub (fixture)\x00")
+        self.p.validate_image(image, "6.12.112-ophub")
+        with self.assertRaises(ValueError):
+            self.p.validate_image(image, "6.12.113-ophub")
+
     def test_traversal_absolute_and_escaping_link_rejected_before_write(self):
         for members in [[("../outside", "file", b"bad")], [("/outside", "file", b"bad")],
                         [("jump", "link", "../outside"), ("jump/child", "file", b"bad")],

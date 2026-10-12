@@ -1,12 +1,87 @@
 import hashlib
+import io
 import json
+import lzma
 import re
+import tarfile
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from .model import Asset
+from .deployment import verified_manifest
+
+METADATA = {"Packages", "Packages.gz", "Packages.xz", "Release", "Release.gpg", "InRelease",
+            "archive-keyring.gpg", "build-manifest.json", "SHA256SUMS", "index.html", "ophub-kernel.sources"}
+GENERATION = "metadata-generation.tar.xz"
+JOURNAL = "publication-journal.tar.xz"
+
+
+def pack_generation(metadata: dict[str, bytes]) -> bytes:
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for name, data in sorted(metadata.items()):
+            if name not in METADATA:
+                raise ValueError("unexpected publication metadata")
+            entry = tarfile.TarInfo(name)
+            entry.size, entry.mode, entry.mtime = len(data), 0o644, 0
+            archive.addfile(entry, io.BytesIO(data))
+    return lzma.compress(stream.getvalue())
+
+
+def unpack_generation(data: bytes, public_key: bytes, fingerprint: str) -> tuple[dict, dict]:
+    limit = 32 * 1024**2
+    if len(data) > limit:
+        raise ValueError("publication generation exceeds limits")
+    decoder = lzma.LZMADecompressor(memlimit=128 * 1024**2)
+    raw = decoder.decompress(data, max_length=limit + 1)
+    if len(raw) > limit or not decoder.eof:
+        raise ValueError("expanded publication generation exceeds limits")
+    metadata = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+        for entry in archive.getmembers():
+            if not entry.isfile() or entry.name not in METADATA or entry.name in metadata:
+                raise ValueError("unsafe publication generation member")
+            metadata[entry.name] = archive.extractfile(entry).read()
+    if set(metadata) != METADATA or metadata['archive-keyring.gpg'] != public_key:
+        raise ValueError("incomplete generation or unexpected repository public key")
+    with tempfile.TemporaryDirectory(prefix="publication-auth-") as folder:
+        path = Path(folder)
+        for name, value in metadata.items():
+            (path / name).write_bytes(value)
+        trusted = path / "trusted.gpg"
+        trusted.write_bytes(public_key)
+        manifest = verified_manifest(path, trusted, fingerprint, check_dates=False, check_packages=False)
+    return metadata, manifest
+
+
+def check_remote_packages(client, release, manifest):
+    assets = client.assets(release)
+    for record in manifest["packages"]:
+        asset = assets[record["filename"]]
+        digest = asset.get("digest") or "sha256:" + hashlib.sha256(client.download(asset)).hexdigest()
+        if digest != "sha256:" + record["sha256"]:
+            raise ValueError("immutable remote package differs: " + record["filename"])
+
+
+def recover_publication(client, release, public_key: bytes, fingerprint: str) -> None:
+    assets = client.assets(release)
+    if JOURNAL not in assets:
+        return
+    metadata, manifest = unpack_generation(client.download(assets[JOURNAL]), public_key, fingerprint)
+    check_remote_packages(client, release, manifest)
+    # The durable journal contains the complete authenticated NEW generation.
+    # Roll forward after process/runner termination, then mark it committed.
+    for name in sorted(METADATA - {"build-manifest.json"}) + ["build-manifest.json"]:
+        current = client.assets(release)
+        if name in current and client.download(current[name]) == metadata[name]:
+            continue
+        if name in current:
+            client.delete(current[name])
+        client.upload(release, name, metadata[name])
+    client.delete(client.assets(release)[JOURNAL])
 
 
 def needs_rebuild(asset: Asset, previous: dict | None, recipe_commit: str, dtb_sha256: str) -> bool:
@@ -75,10 +150,16 @@ class GitHubClient:
 def publish_release(repo: str, wwwroot: Path, token: str, manifest: dict) -> dict:
     if not token:
         raise ValueError("publishing requires explicit GitHub token")
+    public_key = (wwwroot / 'archive-keyring.gpg').read_bytes()
+    fingerprint = manifest['signing_fingerprint']
+    authenticated = verified_manifest(wwwroot, wwwroot / 'archive-keyring.gpg', fingerprint)
+    if authenticated != manifest:
+        raise ValueError('publication manifest is not the authenticated local manifest')
     client = GitHubClient(repo, token)
     version_tag = f"kernel-{manifest['kernel_release']}-m13.{manifest['revision']}"
     version = client.ensure_release(version_tag)
     apt = client.ensure_release("apt-6.12")
+    recover_publication(client, apt, public_key, fingerprint)
     local = {path.name: path.read_bytes() for path in wwwroot.iterdir() if path.is_file()}
     immutable = sorted(name for name in local if name.endswith(".deb"))
     for record in manifest.get("packages", []):
@@ -93,29 +174,39 @@ def publish_release(repo: str, wwwroot: Path, token: str, manifest: dict) -> dic
                 if remote_hash != "sha256:" + hashlib.sha256(local[name]).hexdigest():
                     raise ValueError("immutable remote package differs: " + name)
     previous_assets = client.assets(apt)
-    metadata = sorted(name for name in local if not name.endswith(".deb") and name != "build-manifest.json")
+    if set(name for name in local if not name.endswith('.deb')) != METADATA:
+        raise ValueError('unexpected public publication metadata files')
+    metadata = sorted(METADATA - {"build-manifest.json"})
     backups = {name: client.download(previous_assets[name]) for name in metadata + ["build-manifest.json"] if name in previous_assets}
     for release in (version, apt):
         for name in immutable:
             if name not in client.assets(release):
                 client.upload(release, name, local[name])
     snapshot = client.assets(version)
-    preserve_snapshot = manifest.get("metadata_only", False)
-    if "build-manifest.json" in snapshot and client.download(snapshot["build-manifest.json"]) != local["build-manifest.json"]:
-        previous_manifest = json.loads(client.download(snapshot["build-manifest.json"]))
-        stable = lambda value: {key: data for key, data in value.items()
-                                if key not in ("metadata_generated_at", "metadata_only")}
+    snapshot_metadata = {name: local[name] for name in METADATA}
+    if GENERATION in snapshot:
+        snapshot_metadata, previous_manifest = unpack_generation(client.download(snapshot[GENERATION]), public_key, fingerprint)
+        stable = lambda value: {key: data for key, data in value.items() if key not in ("metadata_generated_at", "metadata_only")}
         if stable(previous_manifest) != stable(manifest):
-            raise ValueError("immutable snapshot build inputs differ")
-        preserve_snapshot = True
+            raise ValueError('immutable snapshot build inputs differ')
+    else:
+        # Persist the first COMPLETE metadata generation before exposing any of
+        # its individual immutable metadata assets; retries reuse these bytes.
+        if any(name in snapshot for name in METADATA):
+            raise ValueError('legacy incomplete snapshot has no durable generation; repair explicitly')
+        client.upload(version, GENERATION, pack_generation(snapshot_metadata))
     # Immutable version snapshot is populated once; retries must match its bytes.
     for name in metadata + ["build-manifest.json"]:
         existing = client.assets(version)
         if name in existing:
-            if not preserve_snapshot and client.download(existing[name]) != local[name]:
+            if client.download(existing[name]) != snapshot_metadata[name]:
                 raise ValueError("immutable version snapshot differs: " + name)
         else:
-            client.upload(version, name, local[name])
+            client.upload(version, name, snapshot_metadata[name])
+    check_remote_packages(client, apt, manifest)
+    # A fresh runner can authenticate and finish this generation even if the
+    # process dies between delete/upload operations below.
+    client.upload(apt, JOURNAL, pack_generation({name: local[name] for name in METADATA}))
     changed = []
     try:
         for name in metadata + ["build-manifest.json"]:
@@ -131,5 +222,7 @@ def publish_release(repo: str, wwwroot: Path, token: str, manifest: dict) -> dic
                 client.delete(existing[name])
             if name in backups:
                 client.upload(apt, name, backups[name])
+        client.delete(client.assets(apt)[JOURNAL])
         raise
+    client.delete(client.assets(apt)[JOURNAL])
     return {"version_tag": version_tag, "apt_tag": "apt-6.12", "repository": repo}
