@@ -32,7 +32,6 @@ def render_timesyncd(server: str) -> str:
         raise ValueError("invalid NTP hostname")
     return f"[Time]\nNTP=\nNTP={server}\nFallbackNTP=\n"
 
-
 def validate_apt_simulation(text: str, allowed: set[str], *, new_only=False) -> None:
     for line in text.splitlines():
         if line.startswith("Remv "):
@@ -41,7 +40,6 @@ def validate_apt_simulation(text: str, allowed: set[str], *, new_only=False) -> 
             fields = line.split(maxsplit=2)
             if len(fields) != 3 or fields[1] not in allowed or (new_only and fields[2].startswith("[")):
                 raise ValueError("unexpected package installation/upgrade: " + line)
-
 
 def verified_manifest(repository: Path, keyring: Path, fingerprint: str, *, check_dates=True, check_packages=True) -> dict:
     with tempfile.TemporaryDirectory(prefix="verified-release-") as folder:

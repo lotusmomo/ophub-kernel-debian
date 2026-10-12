@@ -133,6 +133,6 @@ class FlatRepoTests(unittest.TestCase):
         self.assertEqual(protected.returncode, 0, protected.stdout + protected.stderr)
         self.assertTrue(unrelated.exists(), 'scoped source update removed another source index')
         original = (www / "InRelease").read_text()
-        (www / "InRelease").write_text(original.replace("Origin: M13", "Origin: Bad"))
+        (www / "InRelease").write_text(original.replace("Origin: ophub-kernel-debian", "Origin: Bad"))
         self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
         (www / "InRelease").write_text(original)

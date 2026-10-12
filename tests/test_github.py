@@ -59,6 +59,24 @@ class GitHubTests(unittest.TestCase):
     def test_first_release_rebuilds(self):
         self.assertTrue(self.p.needs_rebuild(self.a, None, "commit1", "b" * 64))
 
+    def test_published_profile_cannot_disappear_on_next_update(self):
+        self.p.check_profile_transition(None, False)
+        self.p.check_profile_transition({"board_profile": "m13"}, True)
+        with self.assertRaises(ValueError):
+            self.p.check_profile_transition({"board_profile": "m13"}, False)
+        with self.assertRaises(ValueError):
+            self.p.check_profile_transition({"packages": [{"package": "m13-boot-support"}]}, False)
+        with tempfile.TemporaryDirectory() as directory:
+            www = Path(directory) / "wwwroot"
+            manifest = self.generation(www)
+            fake = FakeClient()
+            fake.ensure_release("apt-6.12")
+            fake.data["apt-6.12"]["m13-boot-support_6.12.111-1+ophub.1_all.deb"] = b"existing board support"
+            before = {tag: dict(assets) for tag, assets in fake.data.items()}
+            with patch.object(self.p, "GitHubClient", return_value=fake), self.assertRaises(ValueError):
+                self.p.publish_release("fixture/repo", www, "token", manifest)
+            self.assertEqual(fake.data, before, "unsafe profile transition mutated published state")
+
     def test_publish_packages_first_manifest_last_and_no_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             www = Path(directory) / 'wwwroot'
@@ -98,7 +116,7 @@ class GitHubTests(unittest.TestCase):
                 self.p.publish_release("fixture/repo", www, "fixture-token", manifest)
                 manifest = self.generation(www, metadata_only=True)
                 self.p.publish_release("fixture/repo", www, "fixture-token", manifest)
-            self.assertEqual(fake.data["kernel-6.12.112-ophub-m13.1"]["InRelease"], original)
+            self.assertEqual(fake.data["kernel-6.12.112-ophub-r1"]["InRelease"], original)
             self.assertEqual(fake.data["apt-6.12"]["InRelease"], (www / 'InRelease').read_bytes())
 
     def test_same_run_retry_keeps_first_snapshot_with_new_signing_time(self):
@@ -111,7 +129,7 @@ class GitHubTests(unittest.TestCase):
                 self.p.publish_release("fixture/repo", www, "fixture-token", manifest)
                 manifest = self.generation(www)
                 self.p.publish_release("fixture/repo", www, "fixture-token", manifest)
-            self.assertEqual(fake.data["kernel-6.12.112-ophub-m13.1"]["InRelease"], original)
+            self.assertEqual(fake.data["kernel-6.12.112-ophub-r1"]["InRelease"], original)
             self.assertEqual(fake.data["apt-6.12"]["InRelease"], (www / 'InRelease').read_bytes())
 
     def test_partial_snapshot_resumes_original_metadata_generation(self):
@@ -120,13 +138,13 @@ class GitHubTests(unittest.TestCase):
             manifest = self.generation(www)
             original = (www / 'InRelease').read_bytes()
             fake = FakeClient()
-            fake.kill_once = ('kernel-6.12.112-ophub-m13.1', 'Packages')
+            fake.kill_once = ('kernel-6.12.112-ophub-r1', 'Packages')
             with patch.object(self.p, 'GitHubClient', return_value=fake):
                 with self.assertRaises(SystemExit):
                     self.p.publish_release('fixture/repo', www, 'token', manifest)
                 manifest = self.generation(www)
                 self.p.publish_release('fixture/repo', www, 'token', manifest)
-            self.assertEqual(fake.data['kernel-6.12.112-ophub-m13.1']['InRelease'], original)
+            self.assertEqual(fake.data['kernel-6.12.112-ophub-r1']['InRelease'], original)
             self.assertEqual(fake.data['apt-6.12']['InRelease'], (www / 'InRelease').read_bytes())
 
     def test_process_termination_recovers_before_next_sync_restore(self):

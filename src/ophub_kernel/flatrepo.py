@@ -102,9 +102,9 @@ def _build_generation(packages: list[Path], output: Path, signing_home: Path,
         records.append({"filename": package.name, "sha256": sha256_file(package), "size": package.stat().st_size,
                         "package": fields["Package"], "version": fields["Version"], "architecture": fields["Architecture"]})
     published = dict(manifest, packages=records, signing_fingerprint=fingerprint,
-                     metadata_generated_at=now.isoformat(), origin="M13-ophub-6.12")
+                     metadata_generated_at=now.isoformat(), origin="ophub-kernel-debian")
     (output / "build-manifest.json").write_text(json.dumps(published, indent=2) + "\n")
-    release = ("Origin: M13-ophub-6.12\nLabel: M13 ophub stable 6.12\nSuite: apt-6.12\n"
+    release = ("Origin: ophub-kernel-debian\nLabel: ophub kernels for Debian\nSuite: apt-6.12\n"
                "Codename: apt-6.12\nArchitectures: arm64 all\n"
                f"Date: {format_datetime(now, usegmt=True)}\n"
                f"Valid-Until: {format_datetime(now + timedelta(days=7), usegmt=True)}\nSHA256:\n")
@@ -123,7 +123,7 @@ def _build_generation(packages: list[Path], output: Path, signing_home: Path,
     (output / "archive-keyring.gpg").write_bytes(public)
     (output / "ophub-kernel.sources").write_text(render_sources(
         "file:/mnt/ophub-kernel/", "/etc/apt/keyrings/ophub-kernel.gpg"))
-    (output / "index.html").write_text("<!doctype html><meta charset=utf-8><title>M13 kernel artifacts</title>\n" +
+    (output / "index.html").write_text("<!doctype html><meta charset=utf-8><title>ophub Debian kernel packages</title>\n" +
         "\n".join(f'<p><a href="{html.escape(p.name)}">{html.escape(p.name)}</a></p>' for p in sorted(output.iterdir())))
     sums = "".join(f"{sha256_file(path)}  {path.name}\n" for path in sorted(output.iterdir())
                    if path.name != "SHA256SUMS")

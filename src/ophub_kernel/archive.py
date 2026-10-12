@@ -68,10 +68,10 @@ def validate_image(image: Path, release: str) -> None:
         raise ValueError("actual Image release differs from module release")
 
 
-def validate_bundle(bundle: Path, asset: Asset, workspace: Path, m13_dtb: Path) -> ValidatedKernel:
+def validate_bundle(bundle: Path, asset: Asset, workspace: Path, m13_dtb: Path | None = None) -> ValidatedKernel:
     if sha256_file(bundle) != asset.sha256 or bundle.stat().st_size != asset.size:
         raise ValueError("outer asset hash or size mismatch")
-    if sha256_file(m13_dtb) != M13_DTB_SHA256:
+    if m13_dtb is not None and sha256_file(m13_dtb) != M13_DTB_SHA256:
         raise ValueError("M13 DTB differs from verified board input")
     outer = safe_extract(bundle, workspace / "outer")
     inner = outer / asset.version
@@ -94,7 +94,10 @@ def validate_bundle(bundle: Path, asset: Asset, workspace: Path, m13_dtb: Path) 
                                              skip_module_links=category == "modules")
     modules = directories["modules"] / release
     config = read_config(directories["boot"] / f"config-{release}")
-    for capability in ("CONFIG_F2FS_FS", "CONFIG_BLK_DEV_DM", "CONFIG_MMC_BLOCK", "CONFIG_MMC_MESON_GX"):
+    capabilities = ["CONFIG_MMC_BLOCK"]
+    if m13_dtb is not None:
+        capabilities += ["CONFIG_F2FS_FS", "CONFIG_BLK_DEV_DM", "CONFIG_MMC_MESON_GX"]
+    for capability in capabilities:
         if config.get(capability) not in ("y", "m"):
             raise ValueError("required boot capability missing: " + capability)
     image = directories["boot"] / f"vmlinuz-{release}"

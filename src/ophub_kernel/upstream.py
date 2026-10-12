@@ -15,7 +15,7 @@ def sha256_file(path: Path) -> str:
 
 
 def fetch_release() -> dict:
-    request = urllib.request.Request(API, headers={"User-Agent": "m13-ophub-kernel-debian"})
+    request = urllib.request.Request(API, headers={"User-Agent": "ophub-kernel-debian"})
     with urllib.request.urlopen(request, timeout=60) as stream:
         return json.load(stream)
 
@@ -52,7 +52,7 @@ def download_asset(asset: Asset, cache: Path) -> Path:
     partial = cache / (asset.name + ".partial")
     if partial.exists():
         raise ValueError("partial download exists; inspect it before retrying")
-    request = urllib.request.Request(asset.url, headers={"User-Agent": "m13-ophub-kernel-debian"})
+    request = urllib.request.Request(asset.url, headers={"User-Agent": "ophub-kernel-debian"})
     size = 0
     with urllib.request.urlopen(request, timeout=120) as src, partial.open("xb") as dst:
         while block := src.read(1024 * 1024):

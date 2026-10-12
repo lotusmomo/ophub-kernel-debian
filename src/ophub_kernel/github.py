@@ -84,9 +84,15 @@ def recover_publication(client, release, public_key: bytes, fingerprint: str) ->
     client.delete(client.assets(release)[JOURNAL])
 
 
-def needs_rebuild(asset: Asset, previous: dict | None, recipe_commit: str, dtb_sha256: str) -> bool:
+def needs_rebuild(asset: Asset, previous: dict | None, recipe_commit: str, dtb_sha256: str | None) -> bool:
     return not previous or previous.get("asset") != asset.fingerprint() or \
         previous.get("recipe_commit") != recipe_commit or previous.get("dtb_sha256") != dtb_sha256
+
+
+def check_profile_transition(previous: dict | None, with_m13_profile: bool) -> None:
+    if previous and not with_m13_profile and (previous.get("board_profile") == "m13" or
+            any(record.get("package") == "m13-boot-support" for record in previous.get("packages", []))):
+        raise ValueError("cannot disable a published M13 profile: existing clients need its DTB in new kernels; use a separate repository or migrate clients first")
 
 
 class GitHubClient:
@@ -97,7 +103,7 @@ class GitHubClient:
         self.base = "https://api.github.com/repos/" + repo
 
     def request(self, path, *, method="GET", data=None, url=None, content_type="application/json"):
-        headers = {"User-Agent": "m13-ophub-kernel-debian", "Accept": "application/vnd.github+json",
+        headers = {"User-Agent": "ophub-kernel-debian", "Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2022-11-28"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
@@ -156,10 +162,13 @@ def publish_release(repo: str, wwwroot: Path, token: str, manifest: dict) -> dic
     if authenticated != manifest:
         raise ValueError('publication manifest is not the authenticated local manifest')
     client = GitHubClient(repo, token)
-    version_tag = f"kernel-{manifest['kernel_release']}-m13.{manifest['revision']}"
-    version = client.ensure_release(version_tag)
+    version_tag = f"kernel-{manifest['kernel_release']}-r{manifest['revision']}"
     apt = client.ensure_release("apt-6.12")
     recover_publication(client, apt, public_key, fingerprint)
+    had_m13 = any(name.startswith("m13-boot-support_") for name in client.assets(apt))
+    check_profile_transition({"board_profile": "m13" if had_m13 else None},
+                             manifest.get("board_profile") == "m13")
+    version = client.ensure_release(version_tag)
     local = {path.name: path.read_bytes() for path in wwwroot.iterdir() if path.is_file()}
     immutable = sorted(name for name in local if name.endswith(".deb"))
     for record in manifest.get("packages", []):

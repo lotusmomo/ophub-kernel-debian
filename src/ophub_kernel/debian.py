@@ -26,15 +26,19 @@ def _write(path: Path, text: str, mode=0o644):
     path.chmod(mode)
 
 
-def build_packages(kernel: ValidatedKernel, revision: int, output: Path, provenance: dict) -> list[Path]:
+def build_packages(kernel: ValidatedKernel, revision: int, output: Path, provenance: dict,
+                   *, with_m13_profile: bool = False) -> list[Path]:
     if not re.fullmatch(r"6\.12\.[0-9]+-ophub", kernel.release) or revision < 1:
         raise ValueError("invalid kernel release/revision")
     upstream_version = kernel.release.removesuffix("-ophub")
-    version = f"{upstream_version}-1+m13.{revision}"
+    if with_m13_profile and kernel.m13_dtb is None:
+        raise ValueError("M13 profile requires a validated board DTB")
+    version = f"{upstream_version}-1+ophub.{revision}"
     image_name = "linux-image-" + kernel.release
     specs = [(image_name, version, "arm64", "linux-base, kmod, initramfs-tools"),
-             ("linux-image-arm64", "1:" + version, "arm64", f"{image_name} (= {version})"),
-             ("m13-boot-support", version, "all", "u-boot-menu")]
+             ("linux-image-arm64", "1:" + version, "arm64", f"{image_name} (= {version})")]
+    if with_m13_profile:
+        specs.append(("m13-boot-support", version, "all", f"u-boot-menu, {image_name} (= {version})"))
     output.mkdir(parents=True, exist_ok=True)
     targets = [output / f"{name}_{version}_{arch}.deb" for name, _, arch, _ in specs]
     if any(target.exists() for target in targets):
@@ -55,10 +59,11 @@ def build_packages(kernel: ValidatedKernel, revision: int, output: Path, provena
                 shutil.copytree(kernel.modules_dir, stage / "usr/lib/modules" / kernel.release)
                 dtbs = stage / "usr/lib" / image_name / "amlogic"
                 shutil.copytree(kernel.dtb_dir, dtbs)
-                shutil.copyfile(kernel.m13_dtb, dtbs / "meson-gxbb-tianmao-m13.dtb")
-                boot_dtb = stage / "boot/dtbs" / kernel.release / "amlogic/meson-gxbb-tianmao-m13.dtb"
-                boot_dtb.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(kernel.m13_dtb, boot_dtb)
+                boot_dtbs = stage / "boot/dtbs" / kernel.release / "amlogic"
+                shutil.copytree(kernel.dtb_dir, boot_dtbs)
+                if with_m13_profile:
+                    for directory in (dtbs, boot_dtbs):
+                        shutil.copyfile(kernel.m13_dtb, directory / "meson-gxbb-tianmao-m13.dtb")
                 for script in ("postinst", "prerm", "postrm"):
                     template = Path(__file__).resolve().parents[2] / "packaging" / f"image.{script}"
                     _write(stage / "DEBIAN" / script, template.read_text().replace("@KREL@", kernel.release), 0o755)
@@ -67,13 +72,11 @@ def build_packages(kernel: ValidatedKernel, revision: int, output: Path, provena
                 _write(stage / "usr/share/u-boot-menu/conf.d/40-m13.conf", template.read_text())
             size = (sum(p.stat().st_size for p in stage.rglob("*") if p.is_file()) + 1023) // 1024
             control = (f"Package: {name}\nVersion: {control_version}\nArchitecture: {arch}\n"
-                       "Maintainer: M13 kernel packaging <noreply@localhost>\n"
+                       "Maintainer: lotusmomo <yhyxwgy@gmail.com>\n"
                        f"Installed-Size: {size}\nDepends: {depends}\nSection: kernel\nPriority: optional\n"
-                       f"Description: M13 ophub stable kernel {kernel.release}\n"
+                       f"Description: ophub stable kernel {kernel.release} for Debian\n"
                        " Debian-managed kernel packaging with preserved boot firmware.\n")
-            if name == "linux-image-arm64":
-                control += "Recommends: m13-boot-support\n"
-            elif name == image_name:
+            if name == image_name:
                 control += "Recommends: u-boot-menu\n"
             _write(stage / "DEBIAN/control", control)
             updated_at = provenance.get("asset", {}).get("updated_at")

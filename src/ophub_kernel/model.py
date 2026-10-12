@@ -23,4 +23,4 @@ class ValidatedKernel:
     modules_dir: Path
     dtb_dir: Path
     config: dict[str, str]
-    m13_dtb: Path
+    m13_dtb: Path | None = None

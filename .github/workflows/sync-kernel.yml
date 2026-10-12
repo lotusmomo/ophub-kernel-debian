@@ -19,22 +19,23 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
-      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg kmod
+      - run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg kmod gcc
       - run: PYTHONPATH=src python3 -m unittest discover -s tests -v
       - name: Import signing key and synchronize
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          M13_APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
-          M13_APT_FINGERPRINT: ${{ secrets.APT_SIGNING_FINGERPRINT }}
-          M13_GPG_HOME: ${{ runner.temp }}/m13-apt-signing
+          OPHUB_APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          OPHUB_APT_FINGERPRINT: ${{ secrets.APT_SIGNING_FINGERPRINT }}
+          OPHUB_GPG_HOME: ${{ runner.temp }}/ophub-apt-signing
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$M13_APT_SIGNING_KEY"
-          test -n "$M13_APT_FINGERPRINT"
-          install -d -m 0700 "$M13_GPG_HOME"
-          printf '%s' "$M13_APT_SIGNING_KEY" | gpg --homedir "$M13_GPG_HOME" --batch --import
-          unset M13_APT_SIGNING_KEY
+          test -n "$OPHUB_APT_SIGNING_KEY"
+          test -n "$OPHUB_APT_FINGERPRINT"
+          install -d -m 0700 "$OPHUB_GPG_HOME"
+          printf '%s' "$OPHUB_APT_SIGNING_KEY" | gpg --homedir "$OPHUB_GPG_HOME" --batch --import
+          unset OPHUB_APT_SIGNING_KEY
           PYTHONPATH=src python3 -m ophub_kernel.cli sync \
             --repo "$GITHUB_REPOSITORY" --revision "$((1000 + GITHUB_RUN_NUMBER))" \
-            --signing-home "$M13_GPG_HOME" --fingerprint "$M13_APT_FINGERPRINT"
+            --signing-home "$OPHUB_GPG_HOME" --fingerprint "$OPHUB_APT_FINGERPRINT" \
+            --with-m13-profile

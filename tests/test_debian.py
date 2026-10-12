@@ -31,8 +31,28 @@ class DebianTests(unittest.TestCase):
         m13.write_bytes(b"dtb fixture")
         self.kernel = ValidatedKernel("6.12.112-ophub", boot, modules, dtb, {}, m13)
 
+    def test_default_packages_do_not_select_a_board_profile(self):
+        (self.kernel.dtb_dir / "meson-gxbb-p200.dtb").write_bytes(b"upstream dtb")
+        files = self.p.build_packages(self.kernel, 3, self.root / "generic", {})
+        self.assertEqual(len(files), 2, "generic build must not emit a board support package")
+        image = next(path for path in files if path.name.startswith("linux-image-6.12."))
+        meta = next(path for path in files if path.name.startswith("linux-image-arm64_"))
+        control = subprocess.check_output(["dpkg-deb", "--field", str(meta)], text=True)
+        self.assertNotIn("m13-boot-support", control)
+        self.assertIn("Version: 1:6.12.112-1+ophub.3", control)
+        listing = subprocess.check_output(["dpkg-deb", "--contents", str(image)], text=True)
+        self.assertIn("boot/dtbs/6.12.112-ophub/amlogic/meson-gxbb-p200.dtb", listing)
+        self.assertNotIn("meson-gxbb-tianmao-m13.dtb", listing)
+
+    def test_opt_in_profile_requires_a_validated_board_input(self):
+        from dataclasses import replace
+        output = self.root / "unvalidated-profile"
+        with self.assertRaises(ValueError):
+            self.p.build_packages(replace(self.kernel, m13_dtb=None), 1, output, {}, with_m13_profile=True)
+        self.assertFalse(output.exists())
+
     def test_three_packages_dependency_and_payload_contract(self):
-        files = self.p.build_packages(self.kernel, 1, self.root / "out", {"fixture": True})
+        files = self.p.build_packages(self.kernel, 1, self.root / "out", {"fixture": True}, with_m13_profile=True)
         fields = {}
         for path in files:
             text = subprocess.check_output(["dpkg-deb", "--field", str(path)], text=True)
@@ -40,8 +60,10 @@ class DebianTests(unittest.TestCase):
             self.assertNotIn("Conflicts:", text)
             self.assertNotIn("Replaces:", text)
         self.assertEqual(len(files), 3)
-        self.assertIn("Version: 1:6.12.112-1+m13.1", fields["linux-image-arm64"])
-        self.assertIn("Depends: linux-image-6.12.112-ophub (= 6.12.112-1+m13.1)", fields["linux-image-arm64"])
+        self.assertIn("Version: 1:6.12.112-1+ophub.1", fields["linux-image-arm64"])
+        self.assertIn("Depends: linux-image-6.12.112-ophub (= 6.12.112-1+ophub.1)", fields["linux-image-arm64"])
+        self.assertNotIn("m13-boot-support", fields["linux-image-arm64"])
+        self.assertIn("linux-image-6.12.112-ophub (= 6.12.112-1+ophub.1)", fields["m13-boot-support"])
         image = next(path for path in files if path.name.startswith("linux-image-6.12."))
         listing = subprocess.check_output(["dpkg-deb", "--contents", str(image)], text=True)
         self.assertIn("usr/lib/modules/6.12.112-ophub/module.ko", listing)
@@ -52,7 +74,7 @@ class DebianTests(unittest.TestCase):
 
     def test_revision_change_changes_version(self):
         files = self.p.build_packages(self.kernel, 42, self.root / "out", {})
-        self.assertTrue(all("m13.42" in path.name for path in files))
+        self.assertTrue(all("ophub.42" in path.name for path in files))
 
     def test_existing_deb_never_overwritten(self):
         files = self.p.build_packages(self.kernel, 1, self.root / "out", {})

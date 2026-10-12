@@ -1,9 +1,13 @@
 import importlib
+import hashlib
 import io
+import subprocess
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+
+from ophub_kernel.model import Asset
 
 
 def make_tar(path, members):
@@ -72,3 +76,36 @@ class ArchiveTests(unittest.TestCase):
     def test_normalized_dot_duplicate_rejected(self):
         with self.assertRaises(ValueError):
             self.unpack([("./a", "file", b"a"), ("a", "file", b"b")])
+
+    def test_generic_bundle_does_not_require_a_board_dtb_or_f2fs(self):
+        release = "6.12.112-ophub"
+        module = self.root / "fixture.ko"
+        subprocess.run(["cc", "-x", "c", "-c", "-o", str(module), "-"],
+            input='const char vermagic[] __attribute__((section(".modinfo"))) = "vermagic=6.12.112-ophub SMP";',
+            text=True, check=True, capture_output=True)
+        inputs = {
+            "boot": [(f"vmlinuz-{release}", "file", bytes(56) + b"ARMd" + bytes(4) + b"Linux version 6.12.112-ophub (fixture) "),
+                     (f"config-{release}", "file", b"CONFIG_MMC_BLOCK=y\n"),
+                     (f"System.map-{release}", "file", b"fixture")],
+            "modules": [(f"{release}/fixture.ko", "file", module.read_bytes())],
+            "dtb-amlogic": [("meson-gxbb-p200.dtb", "file", b"upstream dtb")],
+        }
+        members, checksums = [], []
+        for category, entries in inputs.items():
+            name = f"{category}-{release}.tar.gz"
+            archive = self.root / name
+            make_tar(archive, entries)
+            data = archive.read_bytes()
+            checksums.append(hashlib.sha256(data).hexdigest() + "  " + name)
+            members.append(("6.12.112/" + name, "file", data))
+        members.append(("6.12.112/sha256sums", "file", ("\n".join(checksums) + "\n").encode()))
+        bundle = self.root / "6.12.112.tar.gz"
+        make_tar(bundle, members)
+        selected = Asset(bundle.name, "6.12.112", 1, "2026-10-05T00:00:00Z", "https://github.com/ophub/kernel/releases/download/kernel_stable/6.12.112.tar.gz",
+                         hashlib.sha256(bundle.read_bytes()).hexdigest(), bundle.stat().st_size)
+        try:
+            kernel = self.p.validate_bundle(bundle, selected, self.root / "validated", None)
+        except (TypeError, ValueError, AttributeError) as error:
+            self.fail("generic validation must not require an M13 board input: " + str(error))
+        self.assertIsNone(kernel.m13_dtb)
+        self.assertEqual(kernel.release, "6.12.112-ophub")

@@ -5,8 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ophub-kernel-debian"
 version = "0.1.0"
-description = "Debian kernel packaging and signed flat repositories for M13"
+description = "ophub kernel packages and signed flat APT repositories for Vanilla Debian"
 requires-python = ">=3.12"
+license = {file = "LICENSE"}
 
 [project.scripts]
 ophub-kernel = "ophub_kernel.cli:main"
