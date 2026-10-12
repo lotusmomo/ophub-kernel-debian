@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ophub-kernel-debian"
+version = "0.1.0"
+description = "Debian kernel packaging and signed flat repositories for M13"
+requires-python = ">=3.12"
+
+[project.scripts]
+ophub-kernel = "ophub_kernel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

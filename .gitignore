@@ -1,0 +1,7 @@
+.cache/
+build/
+wwwroot/
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
