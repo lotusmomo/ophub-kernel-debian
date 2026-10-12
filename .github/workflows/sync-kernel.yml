@@ -36,5 +36,5 @@ jobs:
           printf '%s' "$M13_APT_SIGNING_KEY" | gpg --homedir "$M13_GPG_HOME" --batch --import
           unset M13_APT_SIGNING_KEY
           PYTHONPATH=src python3 -m ophub_kernel.cli sync \
-            --repo "$GITHUB_REPOSITORY" --revision "$GITHUB_RUN_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" --revision "$((1000 + GITHUB_RUN_NUMBER))" \
             --signing-home "$M13_GPG_HOME" --fingerprint "$M13_APT_FINGERPRINT"

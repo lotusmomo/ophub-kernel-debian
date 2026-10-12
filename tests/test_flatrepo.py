@@ -127,6 +127,11 @@ class FlatRepoTests(unittest.TestCase):
             "-o", "APT::Sandbox::User=" + getpass.getuser(), "update", "--error-on=any"]
         good = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        unrelated = apt / 'state/lists/other.example_repo_dists_stable_main_binary-arm64_Packages'
+        unrelated.write_text('Package: retained\nVersion: 1\nArchitecture: arm64\nDescription: sentinel\n\n')
+        protected = subprocess.run(command + ['-o', 'APT::Get::List-Cleanup=false'], capture_output=True, text=True)
+        self.assertEqual(protected.returncode, 0, protected.stdout + protected.stderr)
+        self.assertTrue(unrelated.exists(), 'scoped source update removed another source index')
         original = (www / "InRelease").read_text()
         (www / "InRelease").write_text(original.replace("Origin: M13", "Origin: Bad"))
         self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
