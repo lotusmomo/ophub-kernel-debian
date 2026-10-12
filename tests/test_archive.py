@@ -63,4 +63,3 @@ class ArchiveTests(unittest.TestCase):
     def test_normalized_dot_duplicate_rejected(self):
         with self.assertRaises(ValueError):
             self.unpack([("./a", "file", b"a"), ("a", "file", b"b")])
-

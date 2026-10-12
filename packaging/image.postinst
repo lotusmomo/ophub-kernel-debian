@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+version='@KREL@'
+case "$1" in
+    configure)
+        depmod -a "$version"
+        export INITRD=Yes
+        export DEB_MAINT_PARAMS="$*"
+        if command -v linux-update-symlinks >/dev/null 2>&1; then
+            linux-update-symlinks install "$version" "/boot/vmlinuz-$version"
+        fi
+        run-parts --arg="$version" --arg="/boot/vmlinuz-$version" /etc/kernel/postinst.d
+        if [ ! -s "/boot/initrd.img-$version" ]; then
+            echo "Required initramfs was not generated for $version" >&2
+            exit 1
+        fi
+        ;;
+esac
+exit 0

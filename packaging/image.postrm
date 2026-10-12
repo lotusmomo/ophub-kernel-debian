@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+version='@KREL@'
+case "$1" in
+    remove|purge)
+        export DEB_MAINT_PARAMS="$*"
+        if [ -d /etc/kernel/postrm.d ]; then
+            run-parts --arg="$version" --arg="/boot/vmlinuz-$version" /etc/kernel/postrm.d
+        fi
+        if command -v linux-update-symlinks >/dev/null 2>&1; then
+            linux-update-symlinks remove "$version" "/boot/vmlinuz-$version"
+        fi
+        ;;
+esac
+exit 0
